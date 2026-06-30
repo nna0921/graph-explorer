@@ -1,7 +1,7 @@
 // =============================================================================
 // GRAPH EXPLORER WRAPPER - COMMENTED EXAMPLE
 // =============================================================================
-// Mirrors the current ui-components graph_explorer_wrapper.
+// Mirrors the current ui-components graph_viewer.
 //
 // The wrapper owns graphdb, invites graph_explorer through net_helper, answers
 // db_* requests, forwards child events upward, and queues parent commands until
@@ -15,14 +15,14 @@ const net = require('net_helper')
 const graph_explorer = require('graph-explorer')
 const graphdb = require('./graphdb')
 
-module.exports = graph_explorer_wrapper
+module.exports = graph_viewer
 
 // =============================================================================
 // MAIN COMPONENT FUNCTION
 // =============================================================================
 // A STATE component that mounts graph_explorer as a child and acts as the
 // protocol boundary between the app and Graph Explorer.
-async function graph_explorer_wrapper (opts, invite) {
+async function graph_viewer (opts, invite) {
   // ---------------------------------------------------------------------------
   // 1. Component setup
   // ---------------------------------------------------------------------------
@@ -79,7 +79,7 @@ async function graph_explorer_wrapper (opts, invite) {
   const subs = await sdb.watch(onbatch)
 
   // Hard-switch API: graph_explorer receives a net_helper invite.
-  const explorer_el = await graph_explorer(subs[0], io.invite('graph_explorer', { up: id }))
+  const explorer_el = await graph_explorer(subs[0], io.invite('graph_explorer', { storage: id }))
   graph_explorer_connected = true
 
   // Replay already-loaded entries after child channel setup.
@@ -229,7 +229,7 @@ async function graph_explorer_wrapper (opts, invite) {
     if (!graph_explorer_connected) return
 
     // net_helper creates head/meta; do not build messages manually.
-    _.graph_explorer('db_initialized', {}, { entries })
+    send_child_message('db_initialized', {}, { entries })
     graph_explorer_db_ready = true
     flush_to_graph_explorer_queue()
   }
@@ -237,7 +237,7 @@ async function graph_explorer_wrapper (opts, invite) {
   // ---------------------------------------------------------------------------
   // 6. Graph Explorer -> wrapper messages
   // ---------------------------------------------------------------------------
-  // Handles child messages sent with _.up(...).
+  // Handles child messages sent with _.storage(...).
   function graph_explorer_protocol (msg) {
     const { type } = msg
 
@@ -246,13 +246,20 @@ async function graph_explorer_wrapper (opts, invite) {
       handle_db_request(msg)
     } else {
       // Forward child events upward and preserve causality.
-      _.up(msg.type, msg.head ? { cause: msg.head } : {}, msg.data)
+      send_parent_message(msg.type, msg.head ? { cause: msg.head } : {}, msg.data)
     }
   }
 
   function send_child_message (type, refs = {}, data = {}) {
     // Wrapper -> child sends always use the channel helper.
+    if (!_.graph_explorer) throw new Error('graph_explorer_wrapper net_helper channel "graph_explorer" is not connected')
     return _.graph_explorer(type, refs, data)
+  }
+
+  function send_parent_message (type, refs = {}, data = {}) {
+    // Wrapper -> parent is only available when the wrapper received an invite.
+    if (!_.up) return
+    return _.up(type, refs, data)
   }
 
   function sync_initial_state_to_child () {
@@ -266,7 +273,7 @@ async function graph_explorer_wrapper (opts, invite) {
     // Graph Explorer db API: db_* request in, db_response out.
     const { head: request_head, type: operation, data: params } = request_msg
     if (!db) {
-      console.error('[graph_explorer_wrapper] Database not initialized yet')
+      console.error('[graph_viewer] Database not initialized yet')
       send_response(request_head, null)
       return
     }
@@ -290,7 +297,7 @@ async function graph_explorer_wrapper (opts, invite) {
     send_response(request_head, result)
 
     function db_fail () {
-      console.warn('[graph_explorer_wrapper] Unknown db operation:', operation)
+      console.warn('[graph_viewer] Unknown db operation:', operation)
       send_response(request_head, null)
     }
   }
